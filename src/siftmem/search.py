@@ -7,7 +7,7 @@ import argparse
 import json
 import sys
 
-from siftmem_lib import (
+from siftmem.lib import (
     DEFAULT_MEMORY_DIR,
     bm25_search,
     build_bm25_index,

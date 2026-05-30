@@ -9,7 +9,7 @@ import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from siftmem_lib import (
+from siftmem.lib import (
     DEFAULT_JSONL_FILES,
     DEFAULT_MEMORY_DIR,
     TYPE_TO_FILE,
@@ -17,8 +17,6 @@ from siftmem_lib import (
     log_event,
     utc_now_z,
 )
-
-BUILDER_SCRIPT = Path(__file__).resolve().parent / "siftmem_build_index.py"
 
 
 def _parse_args() -> argparse.Namespace:
@@ -160,7 +158,7 @@ def main() -> int:
         import subprocess
 
         subprocess.run(
-            ["python3", str(BUILDER_SCRIPT), "--memory-dir", str(memory_dir)],
+            [sys.executable, "-m", "siftmem.build_index", "--memory-dir", str(memory_dir)],
             check=False,
         )
 

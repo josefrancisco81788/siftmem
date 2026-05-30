@@ -4,7 +4,21 @@ Append-only JSONL memory store for AI agents and workflows. Siftmem provides typ
 
 ## Install
 
-Clone or copy this directory, then install dependencies:
+From PyPI (when published):
+
+```bash
+pip install siftmem
+```
+
+From source:
+
+```bash
+git clone https://github.com/josefrancisco81788/siftmem.git
+cd siftmem
+pip install -e .
+```
+
+Or install dependencies only:
 
 ```bash
 pip install -r requirements.txt
@@ -27,37 +41,42 @@ export SIFTMEM_MEMORY_DIR=~/.siftmem/memory
 export GEMINI_API_KEY=your-key   # optional unless using --score-assist / consolidate / capture
 
 # Append a memory
-python3 siftmem_append.py --type decision --topic my-topic \
+siftmem-append --type decision --topic my-topic \
   --content "Always validate inputs before indexing." --importance 0.9
 
 # Build markdown + BM25 index
-python3 siftmem_build_index.py
+siftmem-build-index
 
 # Keyword search
-python3 siftmem_search.py "workflow-email-triage" --json
+siftmem-search "workflow-email-triage" --json
 ```
 
-With `pip install siftmem` (see packaging below):
+Module invocation (without console scripts):
 
 ```bash
-siftmem-append --type fact --topic my-topic --content "Example fact." --importance 0.7
-siftmem-build-index
-siftmem-search "my-topic" --json
+python -m siftmem.append --type fact --topic my-topic --content "Example." --importance 0.7
+python -m siftmem.build_index
+python -m siftmem.search "my-topic" --json
 ```
 
-## File layout
+## Package layout
 
-| File / path | Role |
-|-------------|------|
-| `siftmem_lib.py` | Shared library (load, dedup, BM25, Gemini helpers) |
-| `siftmem_append.py` | Append entries to canonical JSONL files |
-| `siftmem_build_index.py` | Build markdown retrieval index + BM25 sidecar |
-| `siftmem_search.py` | BM25 keyword search over JSONL corpus |
-| `siftmem_consolidate.py` | Weekly topic synthesis (Gemini) |
-| `siftmem_session_capture.py` | Extract memories from agent session transcripts |
-| `facts.jsonl`, `decisions.jsonl`, etc. | Append-only canonical store (under `SIFTMEM_MEMORY_DIR`) |
-| `siftmem_index/` | Generated markdown index (`topic__*.md`, `SIFTMEM_INDEX.md`) |
-| `siftmem_bm25_index.json` | Generated BM25 search corpus |
+| Module | Role |
+|--------|------|
+| `siftmem.lib` | Shared library (load, dedup, BM25, Gemini helpers) |
+| `siftmem.append` | Append entries to canonical JSONL files |
+| `siftmem.build_index` | Build markdown retrieval index + BM25 sidecar |
+| `siftmem.search` | BM25 keyword search over JSONL corpus |
+| `siftmem.consolidate` | Weekly topic synthesis (Gemini) |
+| `siftmem.session_capture` | Extract memories from agent session transcripts |
+
+## Generated artifacts (under `SIFTMEM_MEMORY_DIR`)
+
+| Path | Role |
+|------|------|
+| `facts.jsonl`, `decisions.jsonl`, etc. | Append-only canonical store |
+| `siftmem_index/` | Markdown index (`topic__*.md`, `SIFTMEM_INDEX.md`) |
+| `siftmem_bm25_index.json` | BM25 search corpus |
 
 ## Memory types and importance floors
 
@@ -72,4 +91,4 @@ Entries below the floor for their type may be excluded from the markdown index u
 
 ## License
 
-See repository root for license terms.
+MIT

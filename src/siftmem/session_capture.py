@@ -9,7 +9,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from siftmem_lib import (
+from siftmem.lib import (
     DEFAULT_MEMORY_DIR,
     DEFAULT_REPO,
     EXTRACTION_PROMPT,
@@ -20,8 +20,6 @@ from siftmem_lib import (
 )
 
 DEFAULT_SESSIONS_DIR = DEFAULT_REPO / "agents" / "main" / "sessions"
-APPEND_SCRIPT = Path(__file__).resolve().parent / "siftmem_append.py"
-BUILDER_SCRIPT = Path(__file__).resolve().parent / "siftmem_build_index.py"
 
 
 def _parse_args() -> argparse.Namespace:
@@ -100,25 +98,8 @@ def _append_entry(
     if dry_run:
         return {"ok": True, "dry_run": True, "would_append": entry, "dedup": dedup}
 
-    cmd = [
-        "python3",
-        str(APPEND_SCRIPT),
-        "--type",
-        entry_type,
-        "--topic",
-        topic,
-        "--content",
-        content,
-        "--importance",
-        str(importance),
-        "--memory-dir",
-        str(memory_dir),
-    ]
-    if dedup.get("supersedes"):
-        pass  # append handles via JSONL fields — add supersedes in direct write below
-
     # Direct append to preserve supersedes/conflict fields
-    from siftmem_lib import TYPE_TO_FILE
+    from siftmem.lib import TYPE_TO_FILE
 
     target = memory_dir / TYPE_TO_FILE[entry_type]
     payload = {
@@ -196,7 +177,7 @@ def main() -> int:
 
     if args.rebuild_index and not args.dry_run and appended > 0:
         subprocess.run(
-            ["python3", str(BUILDER_SCRIPT), "--memory-dir", str(memory_dir)],
+            [sys.executable, "-m", "siftmem.build_index", "--memory-dir", str(memory_dir)],
             check=False,
         )
 

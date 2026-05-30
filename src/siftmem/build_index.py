@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable
 
-from siftmem_lib import (
+from siftmem.lib import (
     DEFAULT_JSONL_FILES,
     DEFAULT_MEMORY_DIR,
     IMPORTANCE_FLOORS,

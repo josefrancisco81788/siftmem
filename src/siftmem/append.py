@@ -9,7 +9,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from siftmem_lib import (
+from siftmem.lib import (
     DEFAULT_MEMORY_DIR,
     TYPE_TO_FILE,
     check_dedup,
@@ -19,7 +19,10 @@ from siftmem_lib import (
     utc_now_z,
 )
 
-DEFAULT_BUILDER = str(Path(__file__).resolve().parent / "siftmem_build_index.py")
+def _builder_cmd(memory_dir: Path, builder_script: str | None) -> list[str]:
+    if builder_script:
+        return [sys.executable, builder_script, "--memory-dir", str(memory_dir)]
+    return [sys.executable, "-m", "siftmem.build_index", "--memory-dir", str(memory_dir)]
 
 
 def _parse_args() -> argparse.Namespace:
@@ -31,7 +34,11 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--score-assist", action="store_true", help="Gemini suggests importance if omitted.")
     parser.add_argument("--memory-dir", default=str(DEFAULT_MEMORY_DIR))
     parser.add_argument("--rebuild-index", action="store_true")
-    parser.add_argument("--builder-script", default=DEFAULT_BUILDER)
+    parser.add_argument(
+        "--builder-script",
+        default=None,
+        help="Optional path to build_index script; default uses python -m siftmem.build_index",
+    )
     parser.add_argument(
         "--supersedes",
         action="append",
@@ -127,7 +134,7 @@ def main() -> None:
 
     if args.rebuild_index:
         proc = subprocess.run(
-            ["python3", args.builder_script, "--memory-dir", str(memory_dir)],
+            _builder_cmd(memory_dir, args.builder_script),
             text=True,
             capture_output=True,
         )
