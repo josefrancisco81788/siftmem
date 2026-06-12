@@ -13,10 +13,10 @@ from siftmem.lib import (
     DEFAULT_JSONL_FILES,
     DEFAULT_MEMORY_DIR,
     TYPE_TO_FILE,
-    gemini_generate_json,
     log_event,
     utc_now_z,
 )
+from siftmem.llm import generate_json, llm_available, resolve_provider
 
 
 def _parse_args() -> argparse.Namespace:
@@ -26,6 +26,11 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--min-new-entries", type=int, default=3)
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--rebuild-index", action="store_true", default=True)
+    parser.add_argument(
+        "--provider",
+        default=None,
+        help="LLM provider override (none, gemini, openai). Default: SIFTMEM_LLM_PROVIDER.",
+    )
     return parser.parse_args()
 
 
@@ -110,6 +115,38 @@ def _annotate_superseded(memory_dir: Path, sources: list[dict], *, dry_run: bool
 def main() -> int:
     args = _parse_args()
     memory_dir = Path(args.memory_dir)
+    provider = resolve_provider(args.provider)
+
+    if provider == "none":
+        print(
+            json.dumps(
+                {
+                    "ok": False,
+                    "error": (
+                        "consolidation requires an LLM provider. "
+                        "Set SIFTMEM_LLM_PROVIDER=gemini or openai and the matching API key."
+                    ),
+                },
+                indent=2,
+            )
+        )
+        return 1
+
+    if not llm_available(provider):
+        print(
+            json.dumps(
+                {
+                    "ok": False,
+                    "error": (
+                        f"LLM provider '{provider}' is not available. "
+                        "Check API keys and optional deps (pip install siftmem[llm-openai])."
+                    ),
+                },
+                indent=2,
+            )
+        )
+        return 1
+
     by_topic = _load_recent_by_topic(memory_dir, args.days)
 
     synthesized = 0
@@ -122,7 +159,11 @@ def main() -> int:
             "Synthesize these recent memory entries into one durable summary entry. "
             'Respond with JSON: {"type":"lesson|decision|fact","content":"...","importance":0.9}'
         )
-        payload = gemini_generate_json(prompt, json.dumps(rows, ensure_ascii=False))
+        payload = generate_json(
+            prompt,
+            json.dumps(rows, ensure_ascii=False),
+            provider=provider,
+        )
         if not isinstance(payload, dict):
             report.append({"topic": topic, "ok": False, "error": "synthesis failed"})
             continue

@@ -7,8 +7,6 @@ import hashlib
 import json
 import os
 import re
-import urllib.error
-import urllib.request
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from difflib import SequenceMatcher
@@ -86,6 +84,39 @@ def utc_now_z() -> str:
 
 def importance_floor(entry_type: str) -> float:
     return IMPORTANCE_FLOORS.get(entry_type, 0.8)
+
+
+def default_importance(entry_type: str) -> float:
+    return min(1.0, importance_floor(entry_type) + 0.05)
+
+
+_IMPERATIVE_RE = re.compile(
+    r"\b(always|never|must|required|do not|don't|shall|avoid)\b",
+    re.I,
+)
+_TRANSIENT_RE = re.compile(
+    r"\b(today|yesterday|currently|right now|this week|temporary|for now)\b",
+    re.I,
+)
+
+
+def heuristic_importance(entry_type: str, content: str, topic: str) -> float:
+    """Rule-based importance estimate; no LLM required."""
+    score = default_importance(entry_type)
+    text = f"{topic} {content}".lower()
+
+    if _IMPERATIVE_RE.search(text):
+        score = min(1.0, score + 0.05)
+    if entry_type == "decision" and re.search(r"\b(instead|rather than|chose|decided)\b", text):
+        score = min(1.0, score + 0.03)
+    if _TRANSIENT_RE.search(text):
+        score = max(importance_floor(entry_type), score - 0.08)
+    if len(content.strip()) < 30:
+        score = max(importance_floor(entry_type), score - 0.05)
+    if len(content.strip()) > 400:
+        score = min(1.0, score + 0.02)
+
+    return round(min(1.0, max(0.0, score)), 2)
 
 
 def log_event(
@@ -247,57 +278,31 @@ def load_topic_records(
     ]
 
 
-def _resolve_gemini_api_key() -> str | None:
-    value = os.environ.get("GEMINI_API_KEY", "").strip()
-    return value or None
-
-
 def gemini_generate_json(prompt: str, user_content: str, *, model: str = "gemini-2.5-flash") -> Any | None:
-    api_key = _resolve_gemini_api_key()
-    if not api_key:
-        return None
-    url = (
-        f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
-        f"?key={api_key}"
-    )
-    body = {
-        "contents": [
-            {
-                "role": "user",
-                "parts": [{"text": f"{prompt}\n\n---\n\n{user_content}"}],
-            }
-        ],
-        "generationConfig": {"temperature": 0.2, "responseMimeType": "application/json"},
-    }
-    req = urllib.request.Request(
-        url,
-        data=json.dumps(body).encode("utf-8"),
-        headers={"Content-Type": "application/json"},
-        method="POST",
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=120) as resp:
-            payload = json.loads(resp.read().decode("utf-8"))
-    except (urllib.error.URLError, json.JSONDecodeError, TimeoutError):
-        return None
-    candidates = payload.get("candidates") or []
-    if not candidates:
-        return None
-    parts = (candidates[0].get("content") or {}).get("parts") or []
-    texts = [p.get("text", "") for p in parts if isinstance(p, dict)]
-    text = "\n".join(t for t in texts if t).strip()
-    if not text:
-        return None
-    text = re.sub(r"^```(?:json)?\s*", "", text)
-    text = re.sub(r"\s*```$", "", text)
-    try:
-        return json.loads(text)
-    except json.JSONDecodeError:
-        return None
+    """Deprecated: use siftmem.llm.generate_json with provider='gemini'."""
+    from siftmem.llm import gemini_generate_json as _gemini_generate_json
+
+    return _gemini_generate_json(prompt, user_content, model=model)
 
 
-def suggest_importance(entry_type: str, content: str, topic: str) -> float:
-    result = gemini_generate_json(
+def suggest_importance(
+    entry_type: str,
+    content: str,
+    topic: str,
+    *,
+    use_llm: bool = True,
+) -> float:
+    """Score importance via heuristic; optionally refine with LLM when available."""
+    score = heuristic_importance(entry_type, content, topic)
+    if not use_llm:
+        return score
+
+    from siftmem.llm import generate_json, resolve_provider
+
+    if resolve_provider() == "none":
+        return score
+
+    result = generate_json(
         "Suggest a single importance score between 0 and 1 for this memory entry. "
         "Respond with JSON: {\"importance\": 0.75}",
         json.dumps({"type": entry_type, "topic": topic, "content": content}),
@@ -307,8 +312,7 @@ def suggest_importance(entry_type: str, content: str, topic: str) -> float:
             return float(max(0.0, min(1.0, float(result["importance"]))))
         except (TypeError, ValueError):
             pass
-    floor = importance_floor(entry_type)
-    return min(1.0, floor + 0.05)
+    return score
 
 
 def check_dedup(
@@ -363,7 +367,12 @@ def _simple_token_score(query_tokens: list[str], doc_tokens: list[str]) -> float
     return hits / max(len(query_tokens), 1)
 
 
+def bm25_index_path(memory_dir: Path = DEFAULT_MEMORY_DIR) -> Path:
+    return memory_dir / "siftmem_bm25_index.json"
+
+
 def build_bm25_index(memory_dir: Path = DEFAULT_MEMORY_DIR) -> dict[str, Any]:
+    index_path = bm25_index_path(memory_dir)
     records = load_jsonl_records(memory_dir, resolve_supersession=True, include_superseded=False)
     if not records:
         payload = {
@@ -373,9 +382,9 @@ def build_bm25_index(memory_dir: Path = DEFAULT_MEMORY_DIR) -> dict[str, Any]:
             "corpus_tokens": [],
             "backend": "none",
         }
-        BM25_INDEX_PATH.parent.mkdir(parents=True, exist_ok=True)
-        BM25_INDEX_PATH.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
-        return {"ok": True, "corpus_size": 0, "path": str(BM25_INDEX_PATH)}
+        index_path.parent.mkdir(parents=True, exist_ok=True)
+        index_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+        return {"ok": True, "corpus_size": 0, "path": str(index_path)}
 
     corpus_tokens = [tokenize_for_bm25(f"{r.topic} {r.content}") for r in records]
     documents = [
@@ -404,41 +413,100 @@ def build_bm25_index(memory_dir: Path = DEFAULT_MEMORY_DIR) -> dict[str, Any]:
         "corpus_tokens": corpus_tokens,
         "backend": backend,
     }
-    BM25_INDEX_PATH.parent.mkdir(parents=True, exist_ok=True)
-    BM25_INDEX_PATH.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
-    return {"ok": True, "corpus_size": len(documents), "path": str(BM25_INDEX_PATH), "backend": backend}
+    index_path.parent.mkdir(parents=True, exist_ok=True)
+    index_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+    return {"ok": True, "corpus_size": len(documents), "path": str(index_path), "backend": backend}
 
 
-def bm25_search(query: str, *, max_results: int = 5, memory_dir: Path = DEFAULT_MEMORY_DIR) -> list[dict[str, Any]]:
-    if not BM25_INDEX_PATH.exists():
+def _importance_boost(importance: float) -> float:
+    return 0.5 + 0.5 * min(1.0, max(0.0, importance))
+
+
+def _apply_importance_to_score(raw_score: float, importance: float) -> float:
+    """Blend BM25 score with importance; handles negative BM25 on small corpora."""
+    clamped = min(1.0, max(0.0, importance))
+    boost = _importance_boost(clamped)
+    if raw_score > 0:
+        return float(raw_score) * boost
+    return float(raw_score) - (1.0 - clamped) * 0.05
+
+
+def _apply_search_filters(
+    doc: dict[str, Any],
+    *,
+    entry_type: str | None,
+    topic: str | None,
+    min_importance: float | None,
+) -> bool:
+    if entry_type and str(doc.get("type", "")) != entry_type:
+        return False
+    if topic and str(doc.get("topic", "")) != topic:
+        return False
+    if min_importance is not None:
+        try:
+            if float(doc.get("importance", 0.0)) < min_importance:
+                return False
+        except (TypeError, ValueError):
+            return False
+    return True
+
+
+def bm25_search(
+    query: str,
+    *,
+    max_results: int = 5,
+    memory_dir: Path = DEFAULT_MEMORY_DIR,
+    entry_type: str | None = None,
+    topic: str | None = None,
+    min_importance: float | None = None,
+    explain: bool = False,
+) -> list[dict[str, Any]]:
+    index_path = bm25_index_path(memory_dir)
+    if not index_path.exists():
         build_bm25_index(memory_dir)
-    if not BM25_INDEX_PATH.exists():
+    if not index_path.exists():
         return []
 
-    payload = json.loads(BM25_INDEX_PATH.read_text(encoding="utf-8"))
+    payload = json.loads(index_path.read_text(encoding="utf-8"))
     documents = payload.get("documents") or []
     corpus_tokens = payload.get("corpus_tokens") or []
     if not documents or not corpus_tokens:
         return []
 
     query_tokens = tokenize_for_bm25(query)
-    scores: list[float] = []
+    raw_scores: list[float] = []
     try:
         from rank_bm25 import BM25Okapi
 
         bm25 = BM25Okapi(corpus_tokens)
-        scores = list(bm25.get_scores(query_tokens))
+        raw_scores = list(bm25.get_scores(query_tokens))
     except ImportError:
-        scores = [_simple_token_score(query_tokens, doc_tokens) for doc_tokens in corpus_tokens]
+        raw_scores = [_simple_token_score(query_tokens, doc_tokens) for doc_tokens in corpus_tokens]
 
-    ranked = sorted(zip(documents, scores), key=lambda item: item[1], reverse=True)[
-        : max(1, max_results)
-    ]
-    results = []
-    for doc, score in ranked:
-        if score <= 0:
+    scored: list[tuple[dict[str, Any], float, float]] = []
+    for doc, raw_score in zip(documents, raw_scores):
+        if raw_score == 0:
             continue
-        results.append({**doc, "score": float(score)})
+        if not _apply_search_filters(
+            doc,
+            entry_type=entry_type,
+            topic=topic,
+            min_importance=min_importance,
+        ):
+            continue
+        importance = float(doc.get("importance", 0.5) or 0.5)
+        boosted = _apply_importance_to_score(float(raw_score), importance)
+        scored.append((doc, float(raw_score), boosted))
+
+    ranked = sorted(scored, key=lambda item: item[2], reverse=True)[: max(1, max_results)]
+    results: list[dict[str, Any]] = []
+    for doc, raw_score, boosted in ranked:
+        row = {**doc, "score": boosted}
+        if explain:
+            importance = float(doc.get("importance", 0.5) or 0.5)
+            row["bm25_score"] = raw_score
+            row["importance_boost"] = _importance_boost(importance)
+        results.append(row)
     return results
 
 

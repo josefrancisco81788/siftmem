@@ -26,7 +26,8 @@ from siftmem.lib import (
     resolve_superseded_entry_ids,
 )
 
-DEFAULT_OUTPUT_DIR = DEFAULT_MEMORY_DIR / "siftmem_index"
+def _default_output_dir(memory_dir: Path) -> Path:
+    return memory_dir / "siftmem_index"
 
 
 @dataclass
@@ -44,7 +45,11 @@ class MemoryEntry:
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Build Siftmem markdown retrieval index.")
     parser.add_argument("--memory-dir", default=str(DEFAULT_MEMORY_DIR))
-    parser.add_argument("--output-dir", default=str(DEFAULT_OUTPUT_DIR))
+    parser.add_argument(
+        "--output-dir",
+        default=None,
+        help="Markdown index output directory (default: <memory-dir>/siftmem_index).",
+    )
     parser.add_argument(
         "--importance-threshold",
         type=float,
@@ -219,7 +224,7 @@ def _write_manifest(
 def main() -> None:
     args = _parse_args()
     memory_dir = Path(args.memory_dir)
-    output_dir = Path(args.output_dir)
+    output_dir = Path(args.output_dir) if args.output_dir else _default_output_dir(memory_dir)
 
     entries = list(_iter_entries(memory_dir, max_chars=max(80, args.max_entry_chars)))
     selected, gating_report = _select_index_entries(entries)

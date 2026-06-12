@@ -14,10 +14,10 @@ from siftmem.lib import (
     DEFAULT_REPO,
     EXTRACTION_PROMPT,
     check_dedup,
-    gemini_generate_json,
     log_event,
     utc_now_z,
 )
+from siftmem.llm import generate_json, llm_available, resolve_provider
 
 DEFAULT_SESSIONS_DIR = DEFAULT_REPO / "agents" / "main" / "sessions"
 
@@ -31,6 +31,11 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--rebuild-index", action="store_true", default=True)
     parser.add_argument("--no-rebuild-index", action="store_false", dest="rebuild_index")
+    parser.add_argument(
+        "--provider",
+        default=None,
+        help="LLM provider override (none, gemini, openai). Default: SIFTMEM_LLM_PROVIDER.",
+    )
     return parser.parse_args()
 
 
@@ -143,19 +148,37 @@ def main() -> int:
         print(json.dumps({"ok": True, "extracted": 0, "reason": "no transcript text"}))
         return 0
 
+    provider = resolve_provider(args.provider)
+    if provider == "none" or not llm_available(provider):
+        print(
+            json.dumps(
+                {
+                    "ok": False,
+                    "error": (
+                        "session capture requires an LLM provider. "
+                        "Set SIFTMEM_LLM_PROVIDER=gemini or openai and the matching API key. "
+                        "For OpenAI: pip install siftmem[llm-openai]."
+                    ),
+                    "provider": provider,
+                    "sessions_scanned": len(session_files),
+                }
+            )
+        )
+        return 1
+
     combined = "\n\n".join(transcripts)
-    extracted = gemini_generate_json(EXTRACTION_PROMPT, combined)
+    extracted = generate_json(EXTRACTION_PROMPT, combined, provider=provider)
     if extracted is None:
         print(
             json.dumps(
                 {
                     "ok": False,
-                    "error": "gemini extraction unavailable (no API key or API failure)",
+                    "error": f"LLM extraction failed for provider '{provider}'",
                     "sessions_scanned": len(session_files),
                 }
             )
         )
-        return 0
+        return 1
 
     if isinstance(extracted, dict):
         entries = [extracted]
